@@ -38,6 +38,62 @@ import { downloadFileByName } from "./drive";
 
 
 
+function startOfDayTs(d) {
+  const dt = d instanceof Date ? d : new Date(d);
+  return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
+}
+
+function addMonths(date, months) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+
+function addYears(date, years) {
+  const d = new Date(date);
+  d.setFullYear(d.getFullYear() + years);
+  return d;
+}
+
+// Solde total "rejoué" jusqu'à une date (global tous comptes)
+// - expense => -amount
+// - income / reimbursement => +amount
+// - transfer => 0 (ne doit pas impacter le total global)
+function totalBalanceAt(expenses, dateLimit) {
+  const limit = startOfDayTs(dateLimit);
+
+  return expenses.reduce((sum, e) => {
+    const t = startOfDayTs(e.date);
+    if (t > limit) return sum;
+
+    const amount = Number(e.amount || 0);
+    const kind = e.kind;
+
+    if (kind === "transfer") return sum;
+
+    if (kind === "income" || kind === "reimbursement") return sum + amount;
+    if (kind === "expense") return sum - amount;
+
+    // si tu as d'autres kinds, on ne les compte pas par défaut
+    return sum;
+  }, 0);
+}
+
+function formatSignedEUR(value) {
+  const n = Number(value || 0);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)} €`;
+}
+
+function formatSignedPct(value) {
+  if (value === null || value === undefined) return "—";
+  const n = Number(value);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)} %`;
+}
+
+
+
 
 
 
@@ -70,11 +126,40 @@ export default function App() {
   const [forecastItems, setForecastItems] = useState(() => loadForecastItems());
   const [forecastSettings, setForecastSettings] = useState(() => loadForecastSettings());
 
+  const [perfScope, setPerfScope] = useState("7d"); // "7d" | "1m" | "1y" | "all"
 
 
   // wipe data modal pour supprimer toutes les donnees d'un coup 
   const [showWipeModal, setShowWipeModal] = useState(false);
   const [wipeText, setWipeText] = useState("");
+
+
+  const performance = useMemo(() => {
+  const now = new Date();
+
+  // date de début selon scope
+  let start;
+  if (perfScope === "7d") start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  else if (perfScope === "1m") start = addMonths(now, -1);
+  else if (perfScope === "1y") start = addYears(now, -1);
+  else start = null; // all time
+
+  // all time => début = première opération
+  let startDate = start;
+  if (!startDate) {
+    const dates = expenses.map(e => startOfDayTs(e.date)).filter(Boolean);
+    const minTs = dates.length ? Math.min(...dates) : startOfDayTs(now);
+    startDate = new Date(minTs);
+  }
+
+  const startBal = totalBalanceAt(expenses, startDate);
+  const endBal = totalBalanceAt(expenses, now);
+  const delta = endBal - startBal;
+
+  const pct = startBal !== 0 ? (delta / startBal) * 100 : null;
+
+  return { startBal, endBal, delta, pct, startDate };
+}, [expenses, perfScope]);
 
 
 // Google Drive backup initialisation 
@@ -436,7 +521,65 @@ async function restoreFromDrive() {
     <div style={styles.page}>
       <div style={styles.header}>
         <div style={styles.title}>STATERA</div>
-        <div style={styles.subtitle}>Offline • Données sur ton téléphone • Export CSV • v06012026.02</div>
+        <div style={styles.subtitle}>Offline • Données sur ton téléphone • Export CSV • v12012026.01</div>
+      <div style={{ padding: 12, border: "1px solid #eee", borderRadius: 12, marginBottom: 12 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>Performance globale</div>
+
+        {/* Chips */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          {[
+            ["7d", "7j"],
+            ["1m", "1 mois"],
+            ["1y", "1 an"],
+            ["all", "All time"],
+          ].map(([key, label]) => {
+            const active = perfScope === key;
+            return (
+              <button
+                key={key}
+                onClick={() => setPerfScope(key)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  border: "1px solid #ddd",
+                  background: active ? "#111" : "white",
+                  color: active ? "white" : "#111",
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Résultats */}
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+          <div>
+            <div style={{ fontSize: 13, color: "#666" }}>Gain / perte</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>
+              {formatSignedEUR(performance.delta)}
+            </div>
+          </div>
+
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 13, color: "#666" }}>%</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              {formatSignedPct(performance.pct)}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 12, color: "#777", marginTop: 8 }}>
+          Du {new Date(performance.startDate).toLocaleDateString()} à aujourd’hui
+        </div>
+      </div>
+
+      
+      
+      
+      
       </div>
 
       <TopBar tab={tab} setTab={setTab} />
